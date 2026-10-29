@@ -1,0 +1,19 @@
+# Data (downloaded statements, FRED series, labels)
+data/
+
+# Secrets
+.env
+.env.*
+
+# LLM run logs (may contain prompts/responses)
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
