@@ -55,6 +55,17 @@ def test_statement_links_calendar_html_and_2006_2010_format():
     ]
 
 
+def test_statement_links_drops_non_policy_announcements():
+    html = """<a href="/newsevents/press/monetary/20070810a.htm">Statement</a>
+    <a href="/newsevents/pressreleases/monetary20191011a.htm">Statement</a>
+    <a href="/newsevents/press/monetary/20080122b.htm">Statement</a>
+    <a href="/newsevents/pressreleases/monetary20200315a.htm">Statement</a>"""
+    assert fetch.statement_links(html) == [
+        "https://www.federalreserve.gov/newsevents/press/monetary/20080122b.htm",
+        "https://www.federalreserve.gov/newsevents/pressreleases/monetary20200315a.htm",
+    ]
+
+
 def test_parse_new_format_text_and_date():
     r = fetch.parse_statement(read("statement_new.html"), NEW_URL)
     assert r["date"] == "2026-01-28"

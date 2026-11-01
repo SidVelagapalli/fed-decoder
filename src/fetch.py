@@ -29,6 +29,9 @@ STATEMENT_PATH = re.compile(
     r"|^/newsevents/press/monetary/\d{8}[ab]\.htm$"  # 2006-2010; "b" = some unscheduled moves (2008-01-22)
     r"|^/newsevents/pressreleases/monetary\d{8}a\.htm$"
 )
+# Linked as "Statement" but not monetary policy statements (liquidity, securities lending, swap lines, repo plan).
+# Decision (2026-11-01): drop them. Intermeeting rate changes (2008-01-22, 2020-03-03, 2020-03-15) stay.
+EXCLUDED_DATES = {"2007-08-10", "2008-03-11", "2010-05-09", "2019-10-11"}
 # History pages label the link "Statement"; the 2021+ calendar page says "Statement: PDF | HTML".
 LINK_TEXTS = ("Statement", "HTML")
 
@@ -88,6 +91,9 @@ def statement_links(index_html: str) -> list[str]:
         if not STATEMENT_PATH.match(path):
             continue
         url = BASE + path
+        d = re.search(r"\d{8}", path).group()
+        if f"{d[:4]}-{d[4:6]}-{d[6:]}" in EXCLUDED_DATES:
+            continue
         if url not in links:
             links.append(url)
     return links
