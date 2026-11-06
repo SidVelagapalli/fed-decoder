@@ -38,3 +38,6 @@ uv run python -m src.fetch    # download statements + FRED data into data/ (free
 
 ## Limitations
 _To fill in after the eval._
+
+## Acknowledgments
+Built with AI-assisted development tools; the design, decisions, evaluation and review are my own.
