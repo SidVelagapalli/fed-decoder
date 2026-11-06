@@ -33,5 +33,9 @@ def test_explain_wraps_untrusted_text():
     assert user.count("</diff>") == 1 and user.count("</signals>") == 1
 
 
+def test_cut_off_explanation_counts_as_none():
+    assert explain.explain(FakeClient("The Fed lean", stop_reason="max_tokens"), RESULT, SIGNALS, "") == ""
+
+
 def test_explain_returns_text():
     assert explain.explain(FakeClient("The Fed leaned hawkish."), RESULT, SIGNALS, "") == "The Fed leaned hawkish."

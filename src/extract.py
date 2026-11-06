@@ -74,8 +74,12 @@ def _norm(s: str) -> str:
     return " ".join(s.split())
 
 
-def _invalid(reason: str) -> dict:
-    return {"level": "not_mentioned", "evidence_quote": "", "invalid": reason}
+def _invalid(reason: str, sig: dict | None = None) -> dict:
+    out = {"level": "not_mentioned", "evidence_quote": "", "invalid": reason}
+    if sig is not None:
+        # Keep what the model said so rejections can be audited; score.py and explain.py skip invalid fields.
+        out["rejected"] = {"level": sig.get("level"), "evidence_quote": sig.get("evidence_quote")}
+    return out
 
 
 def validate(raw: dict, statement: str) -> dict:
@@ -90,13 +94,13 @@ def validate(raw: dict, statement: str) -> dict:
         level = sig.get("level")
         quote = sig.get("evidence_quote", "")
         if not isinstance(quote, str):
-            out[field] = _invalid("quote not in statement")
+            out[field] = _invalid("quote not in statement", sig)
         elif level not in LEVELS[field]:
-            out[field] = _invalid("unknown level")
+            out[field] = _invalid("unknown level", sig)
         elif level == "not_mentioned":
-            out[field] = _invalid("quote on not_mentioned") if quote else {"level": level, "evidence_quote": ""}
+            out[field] = _invalid("quote on not_mentioned", sig) if quote else {"level": level, "evidence_quote": ""}
         elif not _norm(quote) or _norm(quote) not in _norm(statement):
-            out[field] = _invalid("quote not in statement")
+            out[field] = _invalid("quote not in statement", sig)
         else:
             out[field] = {"level": level, "evidence_quote": quote}
     return out
@@ -111,6 +115,9 @@ def extract(client, statement: str, redline: str) -> dict:
         messages=[{"role": "user", "content": build_prompt(statement, redline)}],
         output_config={"format": {"type": "json_schema", "schema": JSON_SCHEMA}},
     )
+    # max_tokens / refusal means cut-off or off-schema output: fail loudly instead of parsing what's there.
+    if response.stop_reason != "end_turn":
+        return {field: _invalid(f"stop_reason {response.stop_reason}") for field in FIELDS}
     text = next((b.text for b in response.content if b.type == "text"), "")
     try:
         raw = json.loads(text)

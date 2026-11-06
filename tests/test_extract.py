@@ -39,7 +39,8 @@ def test_valid_signal_kept():
 
 def test_quote_not_in_statement_rejected():
     out = validate(raw_all(inflation_concern=ok("high", "Prices are soaring.")), STATEMENT)
-    assert out["inflation_concern"] == {"level": "not_mentioned", "evidence_quote": "", "invalid": "quote not in statement"}
+    assert out["inflation_concern"] == {"level": "not_mentioned", "evidence_quote": "", "invalid": "quote not in statement",
+                                        "rejected": {"level": "high", "evidence_quote": "Prices are soaring."}}
 
 
 def test_whitespace_differences_allowed_in_quote():
@@ -56,7 +57,8 @@ def test_unknown_level_rejected():
 
 def test_not_mentioned_with_quote_rejected():
     out = validate(raw_all(labor_view=ok("not_mentioned", "Inflation remains elevated.")), STATEMENT)
-    assert out["labor_view"] == {"level": "not_mentioned", "evidence_quote": "", "invalid": "quote on not_mentioned"}
+    assert out["labor_view"] == {"level": "not_mentioned", "evidence_quote": "", "invalid": "quote on not_mentioned",
+                                 "rejected": {"level": "not_mentioned", "evidence_quote": "Inflation remains elevated."}}
 
 
 def test_missing_field_marked_invalid():
@@ -71,6 +73,14 @@ def test_bad_json_marks_all_invalid():
     out = extract.extract(FakeClient("this is not json"), STATEMENT, "")
     assert tuple(out) == tuple(FIELDS)
     assert all(v["invalid"] == "bad json" and v["level"] == "not_mentioned" for v in out.values())
+
+
+def test_truncated_or_refused_reply_marks_all_invalid():
+    # Even if the cut-off text happened to parse, it must not be trusted.
+    good_json = json.dumps(raw_all(inflation_concern=ok("high", "Inflation remains elevated.")))
+    for stop in ("max_tokens", "refusal"):
+        out = extract.extract(FakeClient(good_json, stop_reason=stop), STATEMENT, "")
+        assert all(v["invalid"] == f"stop_reason {stop}" for v in out.values())
 
 
 def test_extract_sends_model_and_schema():

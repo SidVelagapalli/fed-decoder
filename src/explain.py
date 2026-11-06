@@ -30,4 +30,6 @@ def explain(client, score_result: dict, signals: dict, redline: str) -> str:
         system=SYSTEM,
         messages=[{"role": "user", "content": content}],
     )
+    if response.stop_reason != "end_turn":  # a cut-off or refused explanation counts as none
+        return ""
     return next((b.text for b in response.content if b.type == "text"), "")
