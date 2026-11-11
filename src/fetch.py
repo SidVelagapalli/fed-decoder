@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 BASE = "https://www.federalreserve.gov"
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
@@ -26,8 +26,14 @@ FRED_DIR = DATA_DIR / "fred"
 ALLOWED_PREFIXES = (BASE + "/", "https://fred.stlouisfed.org/")
 STATEMENT_PATH = re.compile(
     r"^/boarddocs/press/(monetary|general)/\d{4}/\d{8}/(default\.htm)?$"
+    r"|^/newsevents/press/monetary/\d{8}[ab]\.htm$"  # 2006-2010; "b" = some unscheduled moves (2008-01-22)
     r"|^/newsevents/pressreleases/monetary\d{8}a\.htm$"
 )
+# Linked as "Statement" but not monetary policy statements (liquidity, securities lending, swap lines, repo plan).
+# Decision (2026-11-01): drop them. Intermeeting rate changes (2008-01-22, 2020-03-03, 2020-03-15) stay.
+EXCLUDED_DATES = {"2007-08-10", "2008-03-11", "2010-05-09", "2019-10-11"}
+# History pages label the link "Statement"; the 2021+ calendar page says "Statement: PDF | HTML".
+LINK_TEXTS = ("Statement", "HTML")
 
 # Paragraphs starting with any of these (case-insensitive) are page chrome, not statement text.
 # Tune this list against real pages.
@@ -44,21 +50,29 @@ SKIP_PREFIXES = (
     "contact us",
     "return to top",
     "skip to",
+    "current faqs",
 )
+# Old pages' footer paragraph: "2003 Monetary policy Home | News and events Accessibility Last update: ..."
+FOOTER = "Home | News and events"
+PDF_SIZE = re.compile(r"\(\d+ KB PDF\)")
+OPEN_P = re.compile(r"<p(?=[\s>])", re.IGNORECASE)
 # A paragraph that is only a date, e.g. "January 28, 2026" (the release-date heading).
 DATE_ONLY = re.compile(r"^[A-Z][a-z]+ \d{1,2}, \d{4}$")
 
 
 def get(url: str, cache_path: Path) -> str:
     if cache_path.exists():
-        return cache_path.read_text()
+        return cache_path.read_text(encoding="utf-8")
     # Trailing "/" in the allowed prefixes stops look-alike hosts like www.federalreserve.gov.evil.com.
     if not url.startswith(ALLOWED_PREFIXES):
         raise ValueError(f"refusing to fetch from non-allowed host: {url}")
     response = httpx.get(url, headers=HEADERS, timeout=TIMEOUT, follow_redirects=True)
     response.raise_for_status()
+    # Redirects are followed, so check where we actually ended up too.
+    if not str(response.url).startswith(ALLOWED_PREFIXES):
+        raise ValueError(f"redirected to non-allowed host: {response.url}")
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(response.text)
+    cache_path.write_text(response.text, encoding="utf-8")
     time.sleep(DELAY)  # be polite to the servers
     return response.text
 
@@ -70,13 +84,16 @@ def raw_path(url: str) -> Path:
 def statement_links(index_html: str) -> list[str]:
     links = []
     for a in BeautifulSoup(index_html, "html.parser").find_all("a", href=True):
-        if a.get_text().strip() != "Statement":
+        if a.get_text().strip() not in LINK_TEXTS:
             continue
         href = a["href"].strip()
         path = href.removeprefix(BASE)
         if not STATEMENT_PATH.match(path):
             continue
         url = BASE + path
+        d = re.search(r"\d{8}", path).group()
+        if f"{d[:4]}-{d[4:6]}-{d[6:]}" in EXCLUDED_DATES:
+            continue
         if url not in links:
             links.append(url)
     return links
@@ -90,20 +107,55 @@ def index_urls(this_year: int) -> list[str]:
 
 
 def _keep(paragraph: str) -> bool:
-    if not paragraph or DATE_ONLY.match(paragraph):
+    if not paragraph or DATE_ONLY.match(paragraph) or FOOTER in paragraph:
         return False
-    return not paragraph.lower().startswith(SKIP_PREFIXES)
+    # Footnotes end with a "Return to text" back-link.
+    return not paragraph.lower().startswith(SKIP_PREFIXES) and not paragraph.endswith("Return to text")
+
+
+def _link_only(p) -> bool:
+    # A paragraph that is nothing but links ("Current FAQs", "2005 Press Releases") is navigation.
+    # "Bank of Japan (79 KB PDF)" is still just a link; the size is sometimes inside the <a>, sometimes after it.
+    links = PDF_SIZE.sub("", " ".join(a.get_text() for a in p.find_all("a")))
+    rest = PDF_SIZE.sub("", p.get_text())
+    return bool(links.strip()) and links.split() == rest.split()
+
+
+def _text(node) -> str:
+    # Comments are NavigableStrings too; they're not page text.
+    if isinstance(node, NavigableString):
+        return str(node) if type(node) is NavigableString else ""
+    return node.get_text()
+
+
+def _article_paragraphs(article) -> list[str]:
+    # <p> text plus loose text beside the <p>s (2009-06-24's vote line sits after an empty <P></P>).
+    containers = {id(p.parent): p.parent for p in article.find_all("p")}.values()
+    raw = []
+    for box in containers:
+        for c in box.children:
+            if c.name == "p":
+                if not _link_only(c):
+                    raw.append(c.get_text())
+            elif isinstance(c, NavigableString):
+                raw.append(_text(c))
+    return raw
 
 
 def parse_statement(html: str, url: str) -> dict:
     digits = re.search(r"\d{8}", url).group()
+    # Old and 2008-2010 pages never close <p>, so html.parser nests each paragraph (and the footer) inside the
+    # previous one and text gets duplicated. Close the open <p> before each new one; stray </p> are ignored.
+    html = OPEN_P.sub("</p><p", html)
     soup = BeautifulSoup(html, "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")  # else "Central Banks<br>Information" becomes one word
     article = soup.select_one("div#article")
     if article is not None:
-        raw = [p.get_text() for p in article.find_all("p")]
+        raw = _article_paragraphs(article)
     else:
         # Old boarddocs pages: table layout, sometimes with <p> tags, sometimes plain text with <br>.
-        raw = [p.get_text() for p in soup.find_all("p")]
+        raw = [p.get_text() for p in soup.find_all("p") if not _link_only(p)]
         if not raw:
             body = soup.body or soup
             raw = body.get_text("\n").split("\n")

@@ -48,11 +48,13 @@ def test_missing_field_does_not_crash():
 
 def test_unknown_level_counts_zero():
     assert score(sig(growth_view="banana"))["score"] == 0.0
+    assert score({"growth_view": {"level": ["strong"]}})["score"] == 0.0
 
 
 def test_invalid_signal_ignored():
     s = sig(HAWK)
-    s["guidance_direction"] = {"level": "not_mentioned", "evidence_quote": "", "invalid": "bad quote"}
+    # A hawkish level still counts 0 once validation flagged the field.
+    s["guidance_direction"] = {"level": "tightening", "evidence_quote": "", "invalid": "quote not in statement"}
     s["growth_view"] = "not a dict"
     assert score(s)["score"] == round(4.5 / 7.5, 3)
 
