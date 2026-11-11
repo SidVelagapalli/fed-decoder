@@ -83,3 +83,14 @@ def test_evaluate_excludes_blank_next_decision_and_uses_this_meetings_decision()
     assert by_name["Fed Speak Decoder"][1] == pytest.approx(2 / 3)  # hike miss, cut, cut
     assert by_name["Fed Speak Decoder"][3] == pytest.approx(1.0)  # d1 high/+3bp, d4 low/-4bp
     assert by_name["Fed Speak Decoder"][4] == "1/0/2"  # hike/hold/cut call counts
+
+
+def test_rescore_rechecks_rejected_answers_offline(tmp_path):
+    from src.extract import FIELDS
+    signals = {f: {"level": "not_mentioned", "evidence_quote": ""} for f in FIELDS}
+    signals["guidance_direction"] = {"level": "not_mentioned", "evidence_quote": "", "invalid": "quote not in statement",
+                                     "rejected": {"level": "tightening", "evidence_quote": "Further Firming"}}
+    write_log(tmp_path / "run-1.jsonl", {**rec("d1", 0.0), "signals": signals})
+    assert load_scores(tmp_path, "m") == {"d1": 0.0}  # logged score untouched
+    rescored = load_scores(tmp_path, "m", {"d1": "Some further firming may be needed."})
+    assert rescored == {"d1": pytest.approx(2.0 / 7.5, abs=1e-3)}  # guidance tightening now counts

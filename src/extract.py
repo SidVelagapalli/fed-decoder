@@ -70,8 +70,14 @@ def build_prompt(statement: str, redline: str) -> str:
     return f"<statement>\n{clean(statement)}\n</statement>\n\n<diff>\n{clean(redline)}\n</diff>"
 
 
+# The model often capitalizes a quote's first word or straightens a curly apostrophe; neither changes the words.
+# The words themselves still have to match exactly, so a paraphrase is still rejected.
+_TYPO = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+                       "\u2011": "-", "\u2013": "-", "\u2014": "-"})
+
+
 def _norm(s: str) -> str:
-    return " ".join(s.split())
+    return " ".join(s.translate(_TYPO).casefold().split())
 
 
 def _invalid(reason: str, sig: dict | None = None) -> dict:

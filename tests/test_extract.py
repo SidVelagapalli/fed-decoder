@@ -92,3 +92,10 @@ def test_extract_sends_model_and_schema():
     assert call["system"] == extract.SYSTEM
     assert "<statement>" in call["messages"][0]["content"]
     assert "temperature" not in call
+
+
+def test_case_and_curly_punctuation_allowed_in_quote():
+    statement = "The Committee’s view: inflation remains elevated."
+    quote = "The Committee's view: Inflation remains elevated."
+    out = validate(raw_all(inflation_concern=ok("high", quote)), statement)
+    assert out["inflation_concern"] == ok("high", quote)  # the model's own quote is kept as-is

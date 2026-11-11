@@ -10,7 +10,8 @@ import statistics
 import sys
 from pathlib import Path
 
-from src.extract import MODEL
+from src.extract import MODEL, validate
+from src.score import score
 
 LABELS = Path("data/labels.csv")
 STATEMENTS = Path("data/statements.csv")
@@ -33,9 +34,16 @@ DOVE_WORDS = (
 )
 
 
-def load_scores(log_dir: Path, model: str) -> dict[str, float]:
-    """Newest ok score per date for this model: later log file wins, then later line in the file."""
-    scores = {}
+def rescore(record: dict, text: str) -> float:
+    """Re-check the model's original answers with the current quote check and score them again. No API call."""
+    raw = {f: s.get("rejected", s) if "invalid" in s else s for f, s in record["signals"].items()}
+    return score(validate(raw, text))["score"]
+
+
+def load_scores(log_dir: Path, model: str, texts: dict[str, str] | None = None) -> dict[str, float]:
+    """Newest ok score per date for this model: later log file wins, then later line in the file.
+    With texts, each record is re-scored offline (see rescore) instead of using the logged score."""
+    records = {}
     for log in sorted(log_dir.glob("run-*.jsonl")):
         for n, line in enumerate(log.read_text(encoding="utf-8").splitlines(), 1):
             if not line.strip():
@@ -43,10 +51,13 @@ def load_scores(log_dir: Path, model: str) -> dict[str, float]:
             try:
                 record = json.loads(line)
                 if record.get("status") == "ok" and record.get("model") == model:
-                    scores[record["date"]] = record["score"]
+                    records[record["date"]] = record
             except (json.JSONDecodeError, KeyError):
                 print(f"WARNING: unreadable line {n} in {log}; skipped", file=sys.stderr)  # keep stdout a clean table
-    return {d: s for d, s in scores.items() if s is not None}
+    records = {d: r for d, r in records.items() if r.get("score") is not None}
+    if texts is None:
+        return {d: r["score"] for d, r in records.items()}
+    return {d: rescore(r, texts[d]) for d, r in records.items()}  # outside the try: a missing text fails loudly
 
 
 def word_stance(text: str) -> float:
@@ -113,13 +124,19 @@ def fmt(v: float | None) -> str:
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--model", default=MODEL, help="whose log records to evaluate")
+    parser.add_argument("--rescore", action="store_true",
+                        help="re-score logged answers with the current quote check (changed after seeing results)")
     args = parser.parse_args(argv)
 
+    texts = {r["date"]: r["text"] for r in csv.DictReader(STATEMENTS.open(encoding="utf-8"))}
     scores = load_scores(LOG_DIR, args.model)
     if not scores:
         raise SystemExit(f"No ok records for {args.model} in {LOG_DIR}/; nothing to evaluate.")
+    if args.rescore:
+        fixed = load_scores(LOG_DIR, args.model, texts)
+        print(f"Re-scored offline (post-results quote-check fix): {sum(fixed[d] != scores[d] for d in scores)} scores changed")
+        scores = fixed
     labels = list(csv.DictReader(LABELS.open(encoding="utf-8")))
-    texts = {r["date"]: r["text"] for r in csv.DictReader(STATEMENTS.open(encoding="utf-8"))}
     n, n_yield, rows = evaluate(labels, texts, scores)
     if n == 0:
         raise SystemExit("No meeting has both a next decision and an ok record.")
